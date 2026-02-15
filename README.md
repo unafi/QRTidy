@@ -6,9 +6,23 @@
 
 <img src="画面イメージ.png" width="300" alt="画面イメージ">  <img src="Notion画面.png" width="300" alt="Notion画面">
 
+## QRコード生成ツール (QRprint)
+
+[QRprint](./QRprint/) フォルダに、QRコードラベルをPDFとして生成する Python スクリプトが含まれています。
+
+- `generate_qr_labels.py` を実行すると、**A4用紙 4×11 = 44枚分のQRラベル** を1ページのPDFに生成します。
+- 生成されたPDFをラベルシールに印刷し、袋や箱に貼って使います。
+- サンプルPDF (`qr_labels_sheet_20260211_125034.pdf`) も同梱されているので、そのまま印刷してすぐに使えます。
+
+**実行方法:**
+```shell
+pip install qrcode reportlab Pillow
+python QRprint/generate_qr_labels.py
+```
+
 ## 使い方
 
-1. **QRシールを印刷する** — [QRPrint](https://github.com/unafi/PlamoScanner/tree/main/QRprint) でA4ラベルシート用のQRコードPDFを生成し、ラベルシールに印刷。
+1. **QRシールを印刷する** — 上記の QRprint でPDFを生成し、ラベルシールに印刷。
 2. **シールを貼る** — 仕舞いたいもの（袋）と、仕舞う場所（箱）にそれぞれ貼る。
 3. **「箱にしまう」をタップ** — カメラが起動するので、**箱 → 袋** の順にQRコードをスキャンする。
 4. **Notionに自動記録** — Notionにレコードが作成/更新され、箱のページが自動で開く。
@@ -56,7 +70,8 @@ QRTidy/
 │       ├── iosMain/        ← iOS版ソース（準備中）
 │       ├── commonMain/     ← 共通コード
 │       └── jvmMain/        ← Desktop版（準備中）
-└── iosApp/                 ← Xcode プロジェクト
+├── iosApp/                 ← Xcode プロジェクト
+└── QRprint/                ← QRコードラベル生成ツール
 ```
 
 ## セットアップ

@@ -1,0 +1,1 @@
+..\.venv\Scripts\python generate_qr_labels.py

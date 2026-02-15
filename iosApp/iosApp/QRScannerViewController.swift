@@ -56,6 +56,14 @@ class QRScannerView: UIView,
     // MARK: - カメラセットアップ
 
     private func setupCamera() {
+        // オーディオセッションの設定（シャッター音用）
+        do {
+            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [])
+            try AVAudioSession.sharedInstance().setActive(true)
+        } catch {
+            print("QRTidy-iOS: オーディオセッション設定失敗: \(error)")
+        }
+
         let session = AVCaptureSession()
         session.sessionPreset = .high
 
@@ -82,6 +90,11 @@ class QRScannerView: UIView,
         let photo = AVCapturePhotoOutput()
         if session.canAddOutput(photo) {
             session.addOutput(photo)
+            
+            // 出力の向きを「縦（Portrait）」に完全固定
+            if let connection = photo.connection(with: .video), connection.isVideoOrientationSupported {
+                connection.videoOrientation = .portrait
+            }
         }
         self.photoOutput = photo
 
@@ -90,6 +103,12 @@ class QRScannerView: UIView,
         preview.videoGravity = .resizeAspectFill
         preview.frame = bounds
         layer.addSublayer(preview)
+        
+        // プレビューの向きも「縦（Portrait）」に完全固定
+        if let connection = preview.connection, connection.isVideoOrientationSupported {
+            connection.videoOrientation = .portrait
+        }
+        
         self.previewLayer = preview
 
         self.captureSession = session
@@ -122,6 +141,15 @@ class QRScannerView: UIView,
 
     @objc private func capturePhoto() {
         guard let photoOutput = self.photoOutput else { return }
+
+        // 念のため、撮影の瞬間にも向きを「縦（Portrait）」に強制固定
+        if let connection = photoOutput.connection(with: .video), connection.isVideoOrientationSupported {
+            connection.videoOrientation = .portrait
+        }
+
+        // シャッター音
+        AudioServicesPlaySystemSound(1108)
+        
         let settings = AVCapturePhotoSettings()
         photoOutput.capturePhoto(with: settings, delegate: self)
         print("QRTidy-iOS: 撮影開始")
@@ -137,13 +165,12 @@ class QRScannerView: UIView,
               let qrValue = object.stringValue else { return }
 
         isProcessing = true
+        
+        // QR検出音（シャッター音と同じ）
+        AudioServicesPlaySystemSound(1108)
+        
         print("QRTidy-iOS: QR検出: \(qrValue)")
         onQrDetected(qrValue)
-
-        // 連続検出を防止 (0.5秒後に解除)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            self?.isProcessing = false
-        }
     }
 
     // MARK: - 写真撮影デリゲート
@@ -161,9 +188,17 @@ class QRScannerView: UIView,
             return
         }
 
+        // UIImage生成
+        guard let uiImage = UIImage(data: imageData) else {
+            print("QRTidy-iOS: UIImage変換に失敗")
+            return
+        }
+        
+        // **ここから追加**: 正方形にクロップ
+        let croppedImage = uiImage.cropToSquare()
+        
         // JPEG圧縮 (品質70%)
-        guard let uiImage = UIImage(data: imageData),
-              let jpegData = uiImage.jpegData(compressionQuality: 0.7) else {
+        guard let jpegData = croppedImage.jpegData(compressionQuality: 0.7) else {
             print("QRTidy-iOS: JPEG変換に失敗")
             return
         }
@@ -180,5 +215,27 @@ class QRScannerView: UIView,
             }
         }
         onPhotoCaptured(kotlinBytes)
+    }
+}
+
+// MARK: - 画像加工用拡張
+extension UIImage {
+    func cropToSquare() -> UIImage {
+        // オリジナルの向きを考慮したサイズを取得
+        let originalWidth = size.width
+        let originalHeight = size.height
+        let edge = min(originalWidth, originalHeight)
+        
+        // 中央を切り抜くための座標計算
+        let posX = (originalWidth - edge) / 2.0
+        let posY = (originalHeight - edge) / 2.0
+        
+        let cropRect = CGRect(x: posX, y: posY, width: edge, height: edge)
+        
+        // 画像を現在の向きなどを考慮して描画し直し、クロップする
+        let renderer = UIGraphicsImageRenderer(size: cropRect.size)
+        return renderer.image { _ in
+            draw(at: CGPoint(x: -posX, y: -posY))
+        }
     }
 }

@@ -236,19 +236,21 @@ fun MainViewController() = androidx.compose.ui.window.ComposeUIViewController {
             ) {
                 if (isScanningActive) {
                     // iOS ネイティブのカメラビューを UIKitView で埋め込み
-                    IOSCameraView(
-                        onQrDetected = { qrValue -> onIdDetected(qrValue) },
-                        onPhotoCaptured = { imageData ->
-                            capturedImageData = imageData
-                            // ByteArrayからImageBitmapに変換
-                            try {
-                                val skiaImage = SkiaImage.makeFromEncoded(imageData)
-                                capturedImageBitmap = skiaImage.toComposeImageBitmap()
-                            } catch (e: Exception) {
-                                println("QRTidy-iOS: 画像変換失敗: ${e.message}")
+                    key(currentMode) {
+                        IOSCameraView(
+                            onQrDetected = { qrValue -> onIdDetected(qrValue) },
+                            onPhotoCaptured = { imageData ->
+                                capturedImageData = imageData
+                                // ByteArrayからImageBitmapに変換
+                                try {
+                                    val skiaImage = SkiaImage.makeFromEncoded(imageData)
+                                    capturedImageBitmap = skiaImage.toComposeImageBitmap()
+                                } catch (e: Exception) {
+                                    println("QRTidy-iOS: 画像変換失敗: ${e.message}")
+                                }
                             }
-                        }
-                    )
+                        )
+                    }
 
                     // スキャンガイド枠
                     Box(

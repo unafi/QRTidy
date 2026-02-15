@@ -5,8 +5,9 @@ import ComposeApp
 struct ComposeView: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> UIViewController {
         // Swift側のカメラファクトリをKotlin側に登録
-        QRScannerViewControllerFactory.shared.register { onQrDetected, onPhotoCaptured in
+        QRScannerViewControllerFactory.shared.register { qrOnly, onQrDetected, onPhotoCaptured in
             let scannerView = QRScannerView(
+                qrOnly: qrOnly.boolValue,
                 onQrDetected: { qrValue in onQrDetected(qrValue) },
                 onPhotoCaptured: { imageData in onPhotoCaptured(imageData) }
             )

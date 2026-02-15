@@ -238,6 +238,7 @@ fun MainViewController() = androidx.compose.ui.window.ComposeUIViewController {
                     // iOS ネイティブのカメラビューを UIKitView で埋め込み
                     key(currentMode) {
                         IOSCameraView(
+                            qrOnly = (currentMode == IOSScanMode.HAKO_SCAN || currentMode == IOSScanMode.SHIMAU_STEP1_HAKO),
                             onQrDetected = { qrValue -> onIdDetected(qrValue) },
                             onPhotoCaptured = { imageData ->
                                 capturedImageData = imageData
@@ -328,13 +329,15 @@ fun MainViewController() = androidx.compose.ui.window.ComposeUIViewController {
 @OptIn(ExperimentalForeignApi::class)
 @Composable
 fun IOSCameraView(
+    qrOnly: Boolean = false,
     onQrDetected: (String) -> Unit,
     onPhotoCaptured: (ByteArray) -> Unit
 ) {
     UIKitView<UIView>(
         factory = {
-            // Swift側の QRScannerViewController を生成
+            // Swift側の QRScannerView を生成（qrOnly: 箱スキャン時はQRのみ）
             QRScannerViewControllerFactory.create(
+                qrOnly = qrOnly,
                 onQrDetected = onQrDetected,
                 onPhotoCaptured = onPhotoCaptured
             )

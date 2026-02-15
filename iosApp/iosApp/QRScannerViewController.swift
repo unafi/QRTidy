@@ -12,6 +12,9 @@ class QRScannerView: UIView,
     private let onQrDetected: (String) -> Void
     private let onPhotoCaptured: (KotlinByteArray) -> Void
 
+    // QRコードのみモード（箱スキャン時）
+    private let qrOnly: Bool
+
     // AVFoundation
     private var captureSession: AVCaptureSession?
     private var previewLayer: AVCaptureVideoPreviewLayer?
@@ -20,8 +23,10 @@ class QRScannerView: UIView,
     // 二重検出防止
     private var isProcessing = false
 
-    init(onQrDetected: @escaping (String) -> Void,
+    init(qrOnly: Bool = false,
+         onQrDetected: @escaping (String) -> Void,
          onPhotoCaptured: @escaping (KotlinByteArray) -> Void) {
+        self.qrOnly = qrOnly
         self.onQrDetected = onQrDetected
         self.onPhotoCaptured = onPhotoCaptured
         super.init(frame: .zero)
@@ -78,12 +83,28 @@ class QRScannerView: UIView,
             session.addInput(input)
         }
 
-        // QRコード検出用のメタデータ出力
+        // バーコード検出用のメタデータ出力
         let metadataOutput = AVCaptureMetadataOutput()
         if session.canAddOutput(metadataOutput) {
             session.addOutput(metadataOutput)
             metadataOutput.setMetadataObjectsDelegate(self, queue: DispatchQueue.main)
-            metadataOutput.metadataObjectTypes = [.qr]
+
+            if qrOnly {
+                // 箱スキャン: QRコードのみ（箱にはQRシールを貼る）
+                metadataOutput.metadataObjectTypes = [.qr]
+                print("QRTidy-iOS: スキャンモード → QRのみ")
+            } else {
+                // 袋スキャン: QR + 1次元バーコード全対応
+                metadataOutput.metadataObjectTypes = [
+                    .qr,
+                    .ean8, .ean13,
+                    .code128, .code39,
+                    .interleaved2of5,
+                    .itf14,
+                    .upce
+                ]
+                print("QRTidy-iOS: スキャンモード → 全バーコード対応")
+            }
         }
 
         // 写真撮影用の出力
@@ -155,22 +176,55 @@ class QRScannerView: UIView,
         print("QRTidy-iOS: 撮影開始")
     }
 
-    // MARK: - QR検出デリゲート
+    // MARK: - バーコード検出デリゲート（QR + 1次元 + 2段組対応）
 
     func metadataOutput(_ output: AVCaptureMetadataOutput,
                         didOutput metadataObjects: [AVMetadataObject],
                         from connection: AVCaptureConnection) {
         guard !isProcessing else { return }
-        guard let object = metadataObjects.first as? AVMetadataMachineReadableCodeObject,
-              let qrValue = object.stringValue else { return }
+
+        // 有効なバーコードオブジェクトのみ抽出
+        let barcodes = metadataObjects.compactMap { $0 as? AVMetadataMachineReadableCodeObject }
+            .filter { $0.stringValue != nil }
+
+        guard !barcodes.isEmpty else { return }
+
+        // EAN-13バーコードのみ抽出
+        let ean13Barcodes = barcodes.filter { $0.type == .ean13 }
+
+        let resultValue: String
+
+        if ean13Barcodes.count >= 2 {
+            // ── 2段組バーコード検出 ──
+            // ISBN（978/979始まり）を上段、それ以外を下段として結合
+            // これにより本を逆さにかざしても正しい順序を保証
+            let isbnBarcode = ean13Barcodes.first { $0.stringValue!.hasPrefix("978") || $0.stringValue!.hasPrefix("979") }
+            let otherBarcode = ean13Barcodes.first { !($0.stringValue!.hasPrefix("978") || $0.stringValue!.hasPrefix("979")) }
+
+            if let isbn = isbnBarcode?.stringValue, let other = otherBarcode?.stringValue {
+                // ISBN（上段）→ 分類・価格（下段）の順に結合
+                resultValue = "\(isbn)-\(other)"
+                print("QRTidy-iOS: 2段組バーコード検出（書籍）: \(resultValue)")
+            } else {
+                // 両方ISBNまたは両方非ISBNの場合はY座標でソート
+                let sorted = ean13Barcodes.sorted { $0.bounds.origin.y < $1.bounds.origin.y }
+                let upper = sorted[0].stringValue!
+                let lower = sorted[1].stringValue!
+                resultValue = "\(upper)-\(lower)"
+                print("QRTidy-iOS: 2段組バーコード検出（Y座標順）: \(resultValue)")
+            }
+        } else {
+            // ── 単体バーコード（QR / EAN-13 / その他）──
+            resultValue = barcodes.first!.stringValue!
+        }
 
         isProcessing = true
-        
-        // QR検出音（シャッター音と同じ）
+
+        // 検出音
         AudioServicesPlaySystemSound(1108)
-        
-        print("QRTidy-iOS: QR検出: \(qrValue)")
-        onQrDetected(qrValue)
+
+        print("QRTidy-iOS: コード検出: \(resultValue)")
+        onQrDetected(resultValue)
     }
 
     // MARK: - 写真撮影デリゲート

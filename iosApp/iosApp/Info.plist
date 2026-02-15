@@ -4,5 +4,7 @@
 <dict>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>QRコードのスキャンと写真撮影にカメラを使用します</string>
 </dict>
 </plist>

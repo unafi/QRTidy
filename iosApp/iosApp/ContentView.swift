@@ -4,7 +4,15 @@ import ComposeApp
 
 struct ComposeView: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> UIViewController {
-        MainViewControllerKt.MainViewController()
+        // Swift側のカメラファクトリをKotlin側に登録
+        QRScannerViewControllerFactory.shared.register { onQrDetected, onPhotoCaptured in
+            let controller = QRScannerViewController(
+                onQrDetected: { qrValue in onQrDetected(qrValue) },
+                onPhotoCaptured: { imageData in onPhotoCaptured(imageData) }
+            )
+            return controller.view
+        }
+        return MainViewControllerKt.MainViewController()
     }
 
     func updateUIViewController(_ uiViewController: UIViewController, context: Context) {}
@@ -16,6 +24,3 @@ struct ContentView: View {
             .ignoresSafeArea()
     }
 }
-
-
-

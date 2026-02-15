@@ -4,6 +4,8 @@
 
 袋（仕舞うもの）と箱（仕舞う場所）にQRコードを貼り、スキャンするだけで「何をどこに仕舞ったか」をNotionデータベースに自動記録します。プラモデルの余剰パーツ、工具、文具、季節の衣類——何でも整理できます。
 
+<img src="画面イメージ.png" width="300" alt="画面イメージ">  <img src="Notion画面.png" width="300" alt="Notion画面">
+
 ## 使い方
 
 1. **QRシールを印刷する** — [QRPrint](https://github.com/unafi/PlamoScanner/tree/main/QRprint) でA4ラベルシート用のQRコードPDFを生成し、ラベルシールに印刷。

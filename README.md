@@ -119,15 +119,73 @@ object SecretConfig {
 ./gradlew :composeApp:assembleDebug
 ```
 
+### 4. iOS版のビルドと実行（Mac必須）
+
+App Store公開アプリではないため、Xcodeを使って自分のiPhoneにインストールする「サイドロード（野良アプリ）」としてのビルド手順です。
+
+**必要なもの:** Mac, Xcode, Apple ID（無料のApple DeveloperアカウントでOK）, iPhone
+
+1. **リポジトリのクローン**:
+   ```bash
+   git clone https://github.com/unafi/QRTidy.git
+   cd QRTidy
+   ```
+
+2. **SecretConfigの作成（iOS用）**:
+   iOS版用の設定ファイルを作成します。内容はAndroid版と同じで構いません。
+   
+   作成場所:
+   ```
+   composeApp/src/iosMain/kotlin/dev/unafi/qrtidy/SecretConfig.kt
+   ```
+   
+   コード内容（dev.unafi.qrtidyパッケージ）:
+   ```kotlin
+   package dev.unafi.qrtidy
+
+   object SecretConfig {
+       const val NOTION_API_KEY = "ntn_あなたのキー"
+       const val DATABASE_ID_HUKURO = "袋マスターのDB ID"
+       const val DATABASE_ID_HAKO = "箱マスターのDB ID"
+   }
+   ```
+
+3. **Xcodeプロジェクトを開く**:
+   Finderで `iosApp` フォルダ内の `iosApp.xcodeproj` をダブルクリックしてXcodeで開きます。
+
+4. **署名（Signing）の設定**:
+   実機で動かすために、あなたのApple IDを使ったコード署名が必要です。
+   - 左側のナビゲーションで一番上の青いアイコン `iosApp` を選択。
+   - 中央の画面で `TARGETS` リストから `iosApp` を選択。
+   - 上部のタブから **Signing & Capabilities** を開く。
+   - **Team**: 「Add an Account...」を選択して自分のApple IDでログインし、自分のチーム（Personal Team）を選択する。
+   - **Bundle Identifier**: もしエラー（一意でない等）が出る場合、末尾に自分の名前を入れるなどして変更する（例: `com.example.qrtidy`）。
+
+5. **ビルドと実行**:
+   - iPhoneをMacにUSBケーブルで接続する。
+   - iPhone側で「このコンピュータを信頼しますか？」と出たら「信頼」をタップ。
+   - Xcode上部のデバイス選択メニューから、自分のiPhoneを選択。
+   - `Cmd + R` キー、または左上の ▶ ボタンを押してビルド開始。
+   - 初回ビルドには数分かかります。
+   
+   > **Note:** もしビルドエラー（Command PhaseScriptExecution failedなど）が出た場合、メニューの `Product` > `Clean Build Folder` (`Cmd + Shift + K`) を実行してから再試行してください。
+
+6. **iPhone側での信頼設定**:
+   - アプリがインストールされても、初回はセキュリティ制限により起動できません。
+   - iPhoneの **設定 > 一般 > VPNとデバイス管理**（またはプロファイルとデバイス管理）を開く。
+   - 「デベロッパAPP」の下にある自分のメールアドレスを選択。
+   - 「"..."を信頼」をタップして許可する。
+   - ホーム画面からQRTidyのアイコンをタップして起動できます。
+
 ## 技術スタック
 
 | カテゴリ | 技術 |
 |:---|:---|
 | **言語** | Kotlin (KMP) |
 | **UI** | Jetpack Compose / Compose Multiplatform (Material3) |
-| **カメラ / QR** | CameraX + Google ML Kit Barcode Scanning |
-| **NFC** | Android NfcAdapter (Reader Mode) |
-| **通信** | Retrofit2 + OkHttp + Gson |
+| **カメラ / QR** | Android: CameraX + ML Kit <br> iOS: AVFoundation (Native) |
+| **NFC** | Android: NfcAdapter (Reader Mode) |
+| **通信** | Android: Retrofit2 + OkHttp <br> iOS: Ktor Client (Darwin) |
 | **バックエンド** | Notion API (直接通信) |
 
 ## 関連プロジェクト

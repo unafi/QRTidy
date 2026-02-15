@@ -329,14 +329,13 @@ fun IOSCameraView(
     onQrDetected: (String) -> Unit,
     onPhotoCaptured: (ByteArray) -> Unit
 ) {
-    UIKitView(
+    UIKitView<UIView>(
         factory = {
             // Swift側の QRScannerViewController を生成
-            val controller = QRScannerViewControllerFactory.create(
+            QRScannerViewControllerFactory.create(
                 onQrDetected = onQrDetected,
                 onPhotoCaptured = onPhotoCaptured
             )
-            controller.view
         },
         modifier = Modifier.fillMaxSize()
     )

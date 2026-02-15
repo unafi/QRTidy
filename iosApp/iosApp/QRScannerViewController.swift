@@ -3,10 +3,10 @@ import UIKit
 import ComposeApp
 
 /// AVFoundation による QRコードスキャナー + 写真撮影
-/// Kotlin側の QRScannerViewControllerFactory から呼び出される
-class QRScannerViewController: UIViewController,
-                                AVCaptureMetadataOutputObjectsDelegate,
-                                AVCapturePhotoCaptureDelegate {
+/// UIView サブクラスとして実装（UIKitView で直接埋め込み可能）
+class QRScannerView: UIView,
+                     AVCaptureMetadataOutputObjectsDelegate,
+                     AVCapturePhotoCaptureDelegate {
 
     // Kotlin側へのコールバック
     private let onQrDetected: (String) -> Void
@@ -24,32 +24,29 @@ class QRScannerViewController: UIViewController,
          onPhotoCaptured: @escaping (KotlinByteArray) -> Void) {
         self.onQrDetected = onQrDetected
         self.onPhotoCaptured = onPhotoCaptured
-        super.init(nibName: nil, bundle: nil)
+        super.init(frame: .zero)
+        setupCamera()
+        setupNotifications()
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) は未対応です")
     }
 
-    override func viewDidLoad() {
-        super.viewDidLoad()
-        setupCamera()
-        setupNotifications()
+    // MARK: - UIView ライフサイクル
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window != nil {
+            startSession()
+        } else {
+            stopSession()
+        }
     }
 
-    override func viewWillAppear(_ animated: Bool) {
-        super.viewWillAppear(animated)
-        startSession()
-    }
-
-    override func viewWillDisappear(_ animated: Bool) {
-        super.viewWillDisappear(animated)
-        stopSession()
-    }
-
-    override func viewDidLayoutSubviews() {
-        super.viewDidLayoutSubviews()
-        previewLayer?.frame = view.bounds
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        previewLayer?.frame = bounds
     }
 
     deinit {
@@ -91,8 +88,8 @@ class QRScannerViewController: UIViewController,
         // プレビューレイヤー
         let preview = AVCaptureVideoPreviewLayer(session: session)
         preview.videoGravity = .resizeAspectFill
-        preview.frame = view.bounds
-        view.layer.addSublayer(preview)
+        preview.frame = bounds
+        layer.addSublayer(preview)
         self.previewLayer = preview
 
         self.captureSession = session

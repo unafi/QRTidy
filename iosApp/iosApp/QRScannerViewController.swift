@@ -23,6 +23,11 @@ class QRScannerView: UIView,
     // 二重検出防止
     private var isProcessing = false
 
+    // 2段組バーコード待ち合わせ用
+    private var pendingBookBarcode: String? = nil   // 片方だけ先に検出された値
+    private var pendingBookTimer: Timer? = nil       // タイムアウト用タイマー
+    private let bookBarcodeTimeout: TimeInterval = 1.0  // もう片方を待つ秒数
+
     init(qrOnly: Bool = false,
          onQrDetected: @escaping (String) -> Void,
          onPhotoCaptured: @escaping (KotlinByteArray) -> Void) {
@@ -176,6 +181,47 @@ class QRScannerView: UIView,
         print("QRTidy-iOS: 撮影開始")
     }
 
+    // MARK: - 書籍バーコード判定ヘルパー
+
+    /// ISBN段（上段）: 978 or 979 で始まるEAN-13
+    private func isISBN(_ value: String) -> Bool {
+        return value.hasPrefix("978") || value.hasPrefix("979")
+    }
+
+    /// 書籍JAN2段目（下段）: 192（図書）or 191（雑誌）で始まるEAN-13
+    private func isBookJAN2(_ value: String) -> Bool {
+        return value.hasPrefix("192") || value.hasPrefix("191")
+    }
+
+    /// 書籍2段組バーコードの片側かどうか
+    private func isPartOfBookBarcode(_ value: String) -> Bool {
+        return isISBN(value) || isBookJAN2(value)
+    }
+
+    /// ISBN段と書籍JAN2段目を正しい順序（ISBN-JAN2）で結合
+    private func combineBookBarcodes(_ a: String, _ b: String) -> String {
+        let isbn = isISBN(a) ? a : b
+        let jan2 = isISBN(a) ? b : a
+        return "\(isbn)-\(jan2)"
+    }
+
+    /// タイムアウト時の処理（片方だけで確定）
+    @objc private func bookBarcodeTimedOut() {
+        guard let pending = pendingBookBarcode else { return }
+        pendingBookBarcode = nil
+        pendingBookTimer = nil
+        print("QRTidy-iOS: 2段組タイムアウト → 単体として処理: \(pending)")
+        emitResult(pending)
+    }
+
+    /// 結果を確定してKotlin側へ通知
+    private func emitResult(_ value: String) {
+        isProcessing = true
+        AudioServicesPlaySystemSound(1108)
+        print("QRTidy-iOS: コード検出: \(value)")
+        onQrDetected(value)
+    }
+
     // MARK: - バーコード検出デリゲート（QR + 1次元 + 2段組対応）
 
     func metadataOutput(_ output: AVCaptureMetadataOutput,
@@ -192,39 +238,87 @@ class QRScannerView: UIView,
         // EAN-13バーコードのみ抽出
         let ean13Barcodes = barcodes.filter { $0.type == .ean13 }
 
-        let resultValue: String
-
+        // ── ケース1: 1フレームで2つのEAN-13が同時検出 ──
         if ean13Barcodes.count >= 2 {
-            // ── 2段組バーコード検出 ──
-            // ISBN（978/979始まり）を上段、それ以外を下段として結合
-            // これにより本を逆さにかざしても正しい順序を保証
-            let isbnBarcode = ean13Barcodes.first { $0.stringValue!.hasPrefix("978") || $0.stringValue!.hasPrefix("979") }
-            let otherBarcode = ean13Barcodes.first { !($0.stringValue!.hasPrefix("978") || $0.stringValue!.hasPrefix("979")) }
+            let isbnBarcode = ean13Barcodes.first { isISBN($0.stringValue!) }
+            let jan2Barcode = ean13Barcodes.first { isBookJAN2($0.stringValue!) }
 
-            if let isbn = isbnBarcode?.stringValue, let other = otherBarcode?.stringValue {
-                // ISBN（上段）→ 分類・価格（下段）の順に結合
-                resultValue = "\(isbn)-\(other)"
-                print("QRTidy-iOS: 2段組バーコード検出（書籍）: \(resultValue)")
+            if let isbn = isbnBarcode?.stringValue, let jan2 = jan2Barcode?.stringValue {
+                // ISBN + 書籍JAN2段目 → 結合
+                pendingBookTimer?.invalidate()
+                pendingBookBarcode = nil
+                pendingBookTimer = nil
+                let combined = combineBookBarcodes(isbn, jan2)
+                print("QRTidy-iOS: 2段組バーコード同時検出: \(combined)")
+                emitResult(combined)
+                return
             } else {
                 // 両方ISBNまたは両方非ISBNの場合はY座標でソート
                 let sorted = ean13Barcodes.sorted { $0.bounds.origin.y < $1.bounds.origin.y }
                 let upper = sorted[0].stringValue!
                 let lower = sorted[1].stringValue!
-                resultValue = "\(upper)-\(lower)"
-                print("QRTidy-iOS: 2段組バーコード検出（Y座標順）: \(resultValue)")
+                pendingBookTimer?.invalidate()
+                pendingBookBarcode = nil
+                pendingBookTimer = nil
+                let combined = "\(upper)-\(lower)"
+                print("QRTidy-iOS: 2段組バーコード同時検出（Y座標順）: \(combined)")
+                emitResult(combined)
+                return
             }
-        } else {
-            // ── 単体バーコード（QR / EAN-13 / その他）──
-            resultValue = barcodes.first!.stringValue!
         }
 
-        isProcessing = true
+        // ── ケース2: EAN-13が1つだけ検出 ──
+        if let ean13 = ean13Barcodes.first?.stringValue {
 
-        // 検出音
-        AudioServicesPlaySystemSound(1108)
+            if isPartOfBookBarcode(ean13) {
+                // 書籍バーコードの片側を検出
 
-        print("QRTidy-iOS: コード検出: \(resultValue)")
-        onQrDetected(resultValue)
+                if let pending = pendingBookBarcode {
+                    // 既にもう片方を保持中 → ペア成立か確認
+                    if pending != ean13 && isPartOfBookBarcode(pending) {
+                        // ペア成立！ 結合して確定
+                        pendingBookTimer?.invalidate()
+                        pendingBookBarcode = nil
+                        pendingBookTimer = nil
+                        let combined = combineBookBarcodes(pending, ean13)
+                        print("QRTidy-iOS: 2段組バーコード順次検出: \(combined)")
+                        emitResult(combined)
+                        return
+                    }
+                    // 同じコードが再検出された場合は無視（タイマー続行）
+                    return
+                } else {
+                    // 初回検出 → 保持してもう片方を待つ
+                    pendingBookBarcode = ean13
+                    print("QRTidy-iOS: 書籍バーコード片側検出 → もう片方を待機中: \(ean13)")
+                    pendingBookTimer?.invalidate()
+                    pendingBookTimer = Timer.scheduledTimer(
+                        timeInterval: bookBarcodeTimeout,
+                        target: self,
+                        selector: #selector(bookBarcodeTimedOut),
+                        userInfo: nil,
+                        repeats: false
+                    )
+                    return
+                }
+            }
+
+            // 書籍バーコードではないEAN-13 → 即時確定
+            // ただし待機中の書籍バーコードがあればキャンセル
+            pendingBookTimer?.invalidate()
+            pendingBookBarcode = nil
+            pendingBookTimer = nil
+            emitResult(ean13)
+            return
+        }
+
+        // ── ケース3: EAN-13以外（QR / EAN-8 / Code128 etc.）──
+        let resultValue = barcodes.first!.stringValue!
+        // 待機中の書籍バーコードがあればキャンセル
+        pendingBookTimer?.invalidate()
+        pendingBookBarcode = nil
+        pendingBookTimer = nil
+        emitResult(resultValue)
     }
 
     // MARK: - 写真撮影デリゲート

@@ -42,6 +42,7 @@ enum class IOSScanMode {
  */
 fun MainViewController() = androidx.compose.ui.window.ComposeUIViewController {
     val notionClient = remember { IOSNotionClient() }
+    val productSearchClient = remember { ProductSearchClient() }
     val scope = rememberCoroutineScope()
 
     // UI状態
@@ -75,6 +76,17 @@ fun MainViewController() = androidx.compose.ui.window.ComposeUIViewController {
             try {
                 when (currentMode) {
                     IOSScanMode.HUKURO_SCAN -> {
+                        // ★ 商品情報検索（実験: OpenBD + Google Books 補完）
+                        val productInfo = productSearchClient.search(id)
+                        if (productInfo != null) {
+                            println("QRTidy-iOS: ★商品情報★ タイトル=${productInfo.title} / 著者=${productInfo.author} / 出版社=${productInfo.publisher} / 価格=¥${productInfo.price} / 出版日=${productInfo.publishedDate} / ソース=${productInfo.source}")
+                            if (productInfo.coverUrl.isNotEmpty()) println("QRTidy-iOS: ★書影URL★ ${productInfo.coverUrl}")
+                            if (productInfo.description.isNotEmpty()) println("QRTidy-iOS: ★概要★ ${productInfo.description}")
+                            if (productInfo.toc.isNotEmpty()) println("QRTidy-iOS: ★目次★ ${productInfo.toc}")
+                        } else {
+                            println("QRTidy-iOS: 商品情報なし（OpenBD・GoogleBooks ともにデータなし）: $id")
+                        }
+
                         val page = notionClient.findOrCreatePage(
                             SecretConfig.DATABASE_ID_HUKURO, "袋ID", id, "商品名", "新規登録パーツ"
                         )

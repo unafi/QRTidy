@@ -138,3 +138,28 @@ data class RakutenMagazineItem(
     val availability: String = "",
     val booksGenreId: String = ""
 )
+
+// --- 楽天市場商品検索 API レスポンスモデル ---
+// formatVersion=2 形式
+
+@Serializable
+data class RakutenIchibaResponse(
+    val count: Int = 0,
+    val page: Int = 0,
+    val hits: Int = 0,
+    @SerialName("Items")
+    val items: List<RakutenIchibaItem>? = null
+)
+
+@Serializable
+data class RakutenIchibaItem(
+    val itemName: String = "",
+    val itemPrice: Int = 0,
+    val itemCaption: String = "",
+    val itemUrl: String = "",
+    val shopName: String = "",
+    val shopCode: String = "",
+    val genreId: String = "",
+    val mediumImageUrls: List<String>? = null, // 配列で返る
+    val smallImageUrls: List<String>? = null
+)

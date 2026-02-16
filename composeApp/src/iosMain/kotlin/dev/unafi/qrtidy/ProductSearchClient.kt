@@ -74,21 +74,32 @@ class ProductSearchClient {
                 }
             } else {
                 // ISBN ではない → 雑誌 JAN (491xxx) なら楽天ブックス雑誌検索API
+                // それ以外 (一般JAN) または 雑誌検索でヒットしなかった場合は 楽天市場商品検索API
                 val janCode = extractJANCode(scannedValue)
-                if (janCode != null && janCode.startsWith("491")) {
-                    println("$TAG: 雑誌JAN検出 → 楽天ブックス雑誌検索APIで検索")
-                    val rakutenResult = searchRakutenMagazine(janCode)
-                    if (rakutenResult != null) {
-                        println("$TAG: ========== 検索成功（楽天ブックス雑誌検索）==========")
-                        return rakutenResult
+                if (janCode != null) {
+                    if (janCode.startsWith("491")) {
+                        println("$TAG: 雑誌JAN検出 → 楽天ブックス雑誌検索APIで検索")
+                        val rakutenMagazineResult = searchRakutenMagazine(janCode)
+                        if (rakutenMagazineResult != null) {
+                            println("$TAG: ========== 検索成功（楽天ブックス雑誌検索）==========")
+                            return rakutenMagazineResult
+                        }
+                        println("$TAG: 楽天ブックス雑誌検索でヒットなし → 楽天市場商品検索へフォールバック")
                     }
-                    println("$TAG: 楽天ブックスでもヒットなし")
+                    
+                    // 一般JAN、または雑誌検索でヒットしなかった場合
+                    println("$TAG: JANコード($janCode) → 楽天市場商品検索APIで検索")
+                    val rakutenIchibaResult = searchRakutenIchiba(janCode)
+                    if (rakutenIchibaResult != null) {
+                        println("$TAG: ========== 検索成功（楽天市場商品検索）==========")
+                        return rakutenIchibaResult
+                    }
+                    println("$TAG: 楽天市場商品検索でもヒットなし")
                 } else {
-                    println("$TAG: ISBN/雑誌JAN未検出 → 検索スキップ")
+                    println("$TAG: ISBN/JAN未検出 → 検索スキップ")
                 }
             }
 
-            // TODO: 一般商品は楽天商品検索APIで対応（後日実装）
             println("$TAG: ========== 検索終了（結果なし）==========")
             null
         } catch (e: Exception) {
@@ -402,6 +413,83 @@ class ProductSearchClient {
             toc = "",
             publishedDate = item.salesDate,
             source = "楽天ブックス"
+        )
+    }
+
+    /**
+     * 楽天市場商品検索 API で商品情報を取得
+     * 一般 JAN (45xxx, 49xxx) や雑誌のフォールバック用
+     * keyword パラメータに JAN コードを指定して検索
+     */
+    private suspend fun searchRakutenIchiba(janCode: String): ProductInfo? {
+        val baseUrl = "https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20220601"
+        println("$TAG: [楽天市場] リクエスト: GET $baseUrl?keyword=$janCode")
+
+        val response: HttpResponse = try {
+            client.get(baseUrl) {
+                parameter("applicationId", SecretConfig.RAKUTEN_APP_ID)
+                parameter("accessKey", SecretConfig.RAKUTEN_API_KEY)
+                parameter("keyword", janCode) // JANコードをキーワードとして指定
+                parameter("formatVersion", "2")
+                parameter("format", "json")
+                parameter("hits", "1")
+                // 楽天 OpenAPI はリファラー制限あり
+                headers {
+                    append("Origin", "https://github.com")
+                    append("Referer", "https://github.com/")
+                }
+            }
+        } catch (e: Exception) {
+            println("$TAG: [楽天市場] HTTP通信エラー: ${e::class.simpleName}: ${e.message}")
+            return null
+        }
+
+        val bodyText = response.bodyAsText()
+        if (bodyText.length < 3000) {
+            println("$TAG: [楽天市場] レスポンス全文: $bodyText")
+        } else {
+            println("$TAG: [楽天市場] レスポンス先頭500文字: ${bodyText.take(500)}")
+        }
+
+        val rakutenResponse: RakutenIchibaResponse = try {
+            json.decodeFromString(bodyText)
+        } catch (e: Exception) {
+            println("$TAG: [楽天市場] JSONパースエラー: ${e::class.simpleName}: ${e.message}")
+            return null
+        }
+
+        println("$TAG: [楽天市場] 検索ヒット数: ${rakutenResponse.count}")
+
+        if (rakutenResponse.count == 0 || rakutenResponse.items.isNullOrEmpty()) {
+            println("$TAG: [楽天市場] ヒットなし")
+            return null
+        }
+
+        val item = rakutenResponse.items[0]
+        // 画像URLの取得（配列の最初の要素）
+        val imageUrl = item.mediumImageUrls?.firstOrNull() ?: item.smallImageUrls?.firstOrNull() ?: ""
+
+        // --- 取得結果を詳細ログ出力 ---
+        println("$TAG: [楽天市場] ── 取得データ詳細 ──")
+        println("$TAG: [楽天市場]   商品名:     ${item.itemName}")
+        println("$TAG: [楽天市場]   価格:       ¥${item.itemPrice}")
+        println("$TAG: [楽天市場]   ショップ:    ${item.shopName}")
+        println("$TAG: [楽天市場]   商品URL:    ${item.itemUrl}")
+        println("$TAG: [楽天市場]   画像URL:    ${imageUrl.ifEmpty { "(なし)" }}")
+        println("$TAG: [楽天市場]   説明:       ${item.itemCaption.take(50).replace("\n", "")}...")
+        println("$TAG: [楽天市場] ── 詳細ここまで ──")
+
+        return ProductInfo(
+            isbn = janCode,
+            title = item.itemName,
+            author = "",
+            publisher = item.shopName, // 出版社の代わりにショップ名を入れる
+            price = item.itemPrice.toString(),
+            coverUrl = imageUrl,
+            description = item.itemCaption,
+            toc = "",
+            publishedDate = "",
+            source = "楽天市場"
         )
     }
 

@@ -108,3 +108,33 @@ data class GoogleBooksImageLinks(
     val smallThumbnail: String = "",
     val thumbnail: String = ""
 )
+
+// --- 楽天ブックス雑誌検索 API レスポンスモデル ---
+// formatVersion=2 形式
+
+@Serializable
+data class RakutenMagazineResponse(
+    val count: Int = 0,
+    val page: Int = 0,
+    val hits: Int = 0,
+    @SerialName("Items")
+    val items: List<RakutenMagazineItem>? = null
+)
+
+@Serializable
+data class RakutenMagazineItem(
+    val title: String = "",
+    val titleKana: String = "",
+    val publisherName: String = "",
+    val jan: String = "",
+    val itemCaption: String = "",
+    val salesDate: String = "",
+    val cycle: String = "",           // "週刊", "月刊" etc.
+    val itemPrice: Int = 0,
+    val itemUrl: String = "",
+    val smallImageUrl: String = "",
+    val mediumImageUrl: String = "",
+    val largeImageUrl: String = "",
+    val availability: String = "",
+    val booksGenreId: String = ""
+)

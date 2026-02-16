@@ -14,11 +14,11 @@ import kotlinx.serialization.json.*
  * 商品情報検索クライアント（iOS版）
  *
  * JAN/ISBNコードから商品情報を取得する。
- * 現在は OpenBD のみ対応。楽天APIは後日追加予定。
  *
  * 検索フロー:
- * 1. ISBN（978/979始まり）→ OpenBD API で書籍情報を取得
- * 2. 将来: OpenBDでヒットしない場合 → 楽天APIにフォールバック
+ * 1. ISBN（978/979始まり）→ OpenBD API → Google Books 補完
+ * 2. 雑誌JAN（491始まり）→ 楽天ブックス雑誌検索API
+ * 3. 将来: 一般商品JAN → 楽天商品検索API
  */
 class ProductSearchClient {
 
@@ -73,10 +73,22 @@ class ProductSearchClient {
                     return gbResult
                 }
             } else {
-                println("$TAG: ISBN未検出 → 書籍検索スキップ（雑誌・一般商品は対象外）")
+                // ISBN ではない → 雑誌 JAN (491xxx) なら楽天ブックス雑誌検索API
+                val janCode = extractJANCode(scannedValue)
+                if (janCode != null && janCode.startsWith("491")) {
+                    println("$TAG: 雑誌JAN検出 → 楽天ブックス雑誌検索APIで検索")
+                    val rakutenResult = searchRakutenMagazine(janCode)
+                    if (rakutenResult != null) {
+                        println("$TAG: ========== 検索成功（楽天ブックス雑誌検索）==========")
+                        return rakutenResult
+                    }
+                    println("$TAG: 楽天ブックスでもヒットなし")
+                } else {
+                    println("$TAG: ISBN/雑誌JAN未検出 → 検索スキップ")
+                }
             }
 
-            // TODO: 楽天API フォールバック（後日実装）
+            // TODO: 一般商品は楽天商品検索APIで対応（後日実装）
             println("$TAG: ========== 検索終了（結果なし）==========")
             null
         } catch (e: Exception) {
@@ -307,6 +319,90 @@ class ProductSearchClient {
         println("$TAG: [補完] ── 補完ここまで ──")
 
         return supplemented
+    }
+
+    /**
+     * 楽天ブックス雑誌検索 API で雑誌情報を取得
+     * JAN コード (491xxx) で検索する
+     * 認証: applicationId + accessKey + Origin/Referer ヘッダー
+     */
+    private suspend fun searchRakutenMagazine(janCode: String): ProductInfo? {
+        val baseUrl = "https://openapi.rakuten.co.jp/services/api/BooksMagazine/Search/20170404"
+        println("$TAG: [楽天雑誌] リクエスト: GET $baseUrl?jan=$janCode")
+
+        val response: HttpResponse = try {
+            client.get(baseUrl) {
+                parameter("applicationId", SecretConfig.RAKUTEN_APP_ID)
+                parameter("accessKey", SecretConfig.RAKUTEN_API_KEY)
+                parameter("jan", janCode)
+                parameter("formatVersion", "2")
+                parameter("format", "json")
+                parameter("hits", "1")
+                parameter("outOfStockFlag", "1") // 品切れ・絶版本も検索対象にする
+                // 楽天 OpenAPI はリファラー制限あり → Origin/Referer ヘッダー必須
+                headers {
+                    append("Origin", "https://github.com")
+                    append("Referer", "https://github.com/")
+                }
+            }
+        } catch (e: Exception) {
+            println("$TAG: [楽天雑誌] HTTP通信エラー: ${e::class.simpleName}: ${e.message}")
+            return null
+        }
+
+        println("$TAG: [楽天雑誌] HTTPステータス: ${response.status}")
+
+        val bodyText = response.bodyAsText()
+        println("$TAG: [楽天雑誌] レスポンスサイズ: ${bodyText.length} 文字")
+
+        if (bodyText.length < 3000) {
+            println("$TAG: [楽天雑誌] レスポンス全文: $bodyText")
+        } else {
+            println("$TAG: [楽天雑誌] レスポンス先頭500文字: ${bodyText.take(500)}")
+        }
+
+        val rakutenResponse: RakutenMagazineResponse = try {
+            json.decodeFromString(bodyText)
+        } catch (e: Exception) {
+            println("$TAG: [楽天雑誌] JSONパースエラー: ${e::class.simpleName}: ${e.message}")
+            return null
+        }
+
+        println("$TAG: [楽天雑誌] 検索ヒット数: ${rakutenResponse.count}")
+
+        if (rakutenResponse.count == 0 || rakutenResponse.items.isNullOrEmpty()) {
+            println("$TAG: [楽天雑誌] ヒットなし")
+            return null
+        }
+
+        val item = rakutenResponse.items[0]
+
+        // --- 取得結果を詳細ログ出力 ---
+        println("$TAG: [楽天雑誌] ── 取得データ詳細 ──")
+        println("$TAG: [楽天雑誌]   タイトル:    ${item.title}")
+        println("$TAG: [楽天雑誌]   出版社:     ${item.publisherName}")
+        println("$TAG: [楽天雑誌]   JAN:       ${item.jan}")
+        println("$TAG: [楽天雑誌]   発売日:     ${item.salesDate}")
+        println("$TAG: [楽天雑誌]   刊行頻度:   ${item.cycle.ifEmpty { "(なし)" }}")
+        println("$TAG: [楽天雑誌]   価格:       ¥${item.itemPrice}")
+        println("$TAG: [楽天雑誌]   書影URL:    ${item.largeImageUrl.ifEmpty { "(なし)" }}")
+        println("$TAG: [楽天雑誌]   商品URL:    ${item.itemUrl}")
+        println("$TAG: [楽天雑誌]   概要:       ${item.itemCaption.ifEmpty { "(なし)" }}")
+        println("$TAG: [楽天雑誌]   在庫状況:   ${item.availability}")
+        println("$TAG: [楽天雑誌] ── 詳細ここまで ──")
+
+        return ProductInfo(
+            isbn = item.jan,  // 雑誌はISBNではなくJANコード
+            title = item.title,
+            author = "",  // 雑誌に著者はない
+            publisher = item.publisherName,
+            price = item.itemPrice.toString(),
+            coverUrl = item.largeImageUrl,
+            description = item.itemCaption,
+            toc = "",
+            publishedDate = item.salesDate,
+            source = "楽天ブックス"
+        )
     }
 
     /**

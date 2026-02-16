@@ -40,20 +40,21 @@ class ProductSearchClient {
 
     /**
      * JAN/ISBNコードから商品情報を検索
-     * @param scannedValue スキャンされた値（ISBN単体 or "ISBN-JAN2" の2段組形式）
+     * @param scannedValue スキャンされた値（ISBN単体 or "ISBN-JAN2" の2段組形式 or 一般JAN）
      * @return 商品情報。見つからない場合はnull
      */
     suspend fun search(scannedValue: String): ProductInfo? {
         println("$TAG: ========== 商品検索開始 ==========")
         println("$TAG: スキャン値: $scannedValue")
+        println("$TAG: バーコード種別: ${classifyBarcode(scannedValue)}")
 
         return try {
             // 2段組バーコード（"978...-192..."）の場合、ISBN部分を取り出す
             val isbn = extractISBN(scannedValue)
-            println("$TAG: ISBN抽出結果: ${isbn ?: "ISBNなし（書籍ではない可能性）"}")
+            println("$TAG: ISBN抽出結果: ${isbn ?: "ISBNなし"}")
 
             if (isbn != null) {
-                // Step 1: OpenBD で基本情報を取得
+                // Step 1: OpenBD で基本情報を取得（ISBN がある場合のみ）
                 var result = searchOpenBD(isbn)
 
                 // Step 2: Google Books API で補完
@@ -65,14 +66,26 @@ class ProductSearchClient {
                 println("$TAG: OpenBD: ISBNに対応するデータなし")
 
                 // Step 3: OpenBD にない場合、Google Books のみで試行
-                println("$TAG: Google Books のみで検索を試行")
+                println("$TAG: Google Books のみで検索を試行（ISBN: $isbn）")
                 val gbResult = searchGoogleBooks(isbn)
                 if (gbResult != null) {
                     println("$TAG: ========== 検索成功（Google Books のみ）==========")
                     return gbResult
                 }
             } else {
-                println("$TAG: ISBN未検出 → 書籍検索スキップ")
+                // ISBN ではないが、EAN-13 コード（雑誌 491xxx 等）→ Google Books で試行
+                val janCode = extractJANCode(scannedValue)
+                if (janCode != null) {
+                    println("$TAG: ISBN未検出だが EAN-13 コードあり → Google Books で検索試行")
+                    val gbResult = searchGoogleBooks(janCode)
+                    if (gbResult != null) {
+                        println("$TAG: ========== 検索成功（Google Books: JAN検索）==========")
+                        return gbResult
+                    }
+                    println("$TAG: Google Books でもヒットなし")
+                } else {
+                    println("$TAG: 検索可能なコードなし")
+                }
             }
 
             // TODO: 楽天API フォールバック（後日実装）
@@ -324,5 +337,53 @@ class ProductSearchClient {
             }
         }
         return null
+    }
+
+    /**
+     * スキャン値からJANコード（EAN-13）を抽出
+     * ISBN以外のコード（雑誌491xxx、一般商品45xxxなど）も含む
+     * - "4910xxx..." (雑誌) → そのまま
+     * - "4901xxx..." (一般商品) → そのまま
+     * - "978xxx-192xxx" (2段組) → null（extractISBNで処理するため）
+     */
+    private fun extractJANCode(value: String): String? {
+        // ハイフンを含む場合は2段組バーコード → ISBN側で処理済み
+        if (value.contains("-")) return null
+        // 13桁の数字ならEAN-13として扱う
+        if (value.length == 13 && value.all { it.isDigit() }) {
+            return value
+        }
+        // 8桁の数字ならEAN-8として扱う
+        if (value.length == 8 && value.all { it.isDigit() }) {
+            return value
+        }
+        return null
+    }
+
+    /**
+     * バーコード種別を判定（ログ表示用）
+     */
+    private fun classifyBarcode(value: String): String {
+        val parts = value.split("-")
+
+        // 2段組バーコード
+        if (parts.size == 2) {
+            val hasISBN = parts.any { it.startsWith("978") || it.startsWith("979") }
+            val hasBookJAN2 = parts.any { it.startsWith("192") || it.startsWith("191") }
+            if (hasISBN && hasBookJAN2) return "書籍2段組バーコード (ISBN+書籍JAN2)"
+            if (hasISBN) return "ISBN含む2段組バーコード"
+            return "2段組バーコード（不明）"
+        }
+
+        // 単一バーコード
+        val code = parts[0]
+        if (code.startsWith("978") || code.startsWith("979")) return "ISBN (書籍)"
+        if (code.startsWith("491")) return "雑誌JAN (491)"
+        if (code.startsWith("192")) return "書籍JAN2段目・図書 (192)"
+        if (code.startsWith("191")) return "書籍JAN2段目・雑誌 (191)"
+        if (code.startsWith("49") || code.startsWith("45")) return "一般商品JAN (日本)"
+        if (code.length == 13) return "EAN-13 (その他)"
+        if (code.length == 8) return "EAN-8"
+        return "不明 (${code.length}桁)"
     }
 }

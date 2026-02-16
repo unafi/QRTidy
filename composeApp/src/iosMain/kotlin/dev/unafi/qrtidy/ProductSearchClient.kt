@@ -73,19 +73,7 @@ class ProductSearchClient {
                     return gbResult
                 }
             } else {
-                // ISBN ではないが、EAN-13 コード（雑誌 491xxx 等）→ Google Books で試行
-                val janCode = extractJANCode(scannedValue)
-                if (janCode != null) {
-                    println("$TAG: ISBN未検出だが EAN-13 コードあり → Google Books で検索試行")
-                    val gbResult = searchGoogleBooks(janCode)
-                    if (gbResult != null) {
-                        println("$TAG: ========== 検索成功（Google Books: JAN検索）==========")
-                        return gbResult
-                    }
-                    println("$TAG: Google Books でもヒットなし")
-                } else {
-                    println("$TAG: 検索可能なコードなし")
-                }
+                println("$TAG: ISBN未検出 → 書籍検索スキップ（雑誌・一般商品は対象外）")
             }
 
             // TODO: 楽天API フォールバック（後日実装）

@@ -27,6 +27,7 @@ import org.jetbrains.skia.Image as SkiaImage
 import platform.AVFoundation.*
 import platform.Foundation.*
 import platform.UIKit.*
+import kotlinx.serialization.json.*
 
 // スキャンモード (Android版と同じ)
 enum class IOSScanMode {
@@ -61,6 +62,136 @@ fun MainViewController() = androidx.compose.ui.window.ComposeUIViewController {
     var selectedHakoUid by remember { mutableStateOf<String?>(null) }
 
     // QR検出時の処理
+    // 共通処理: 袋（アイテム）情報のスキャン・登録・更新
+    suspend fun processHukuroScan(id: String): IOSNotionPage {
+        // 1. バーコード種別判定
+        val codeType = productSearchClient.classifyBarcodeType(id)
+        
+        // 2. Notionページ検索/作成
+        val page = notionClient.findOrCreatePage(
+            SecretConfig.DATABASE_ID_HUKURO, "袋ID", id, "物名", "新規登録パーツ"
+        )
+        
+        // 3. カテゴリ未設定の場合のみ API検索 & 情報更新
+        // デバッグ: 取得したページのプロパティキーを確認
+        println("QRTidy-iOS: Page ID: ${page.id}")
+        println("QRTidy-iOS: Properties included: ${page.properties.keys.sorted().joinToString(", ")}")
+        
+        // 3. カテゴリ未設定の場合のみ API検索 & 情報更新
+        val categoryProp = page.properties["カテゴリ"]
+        
+        // カテゴリは Select または RichText の可能性があるため両方チェック
+        // RichTextの場合は全要素を結合してトリムする
+        val currentCategory = (categoryProp?.select?.name 
+            ?: categoryProp?.rich_text?.joinToString("") { it.plain_text }
+            ?: "").trim()
+        
+        println("QRTidy-iOS: カテゴリプロパティ取得: $categoryProp")
+        println("QRTidy-iOS: 現在のカテゴリ(判定値): '$currentCategory'")
+
+        if (currentCategory.isEmpty()) {
+            // 対象: 書籍 or 雑誌 (一般商品はスキップ)
+            if (codeType == ProductSearchClient.BarcodeType.BOOK || codeType == ProductSearchClient.BarcodeType.MAGAZINE) {
+                println("QRTidy-iOS: カテゴリ未設定 & 書籍/雑誌コード検出 → API検索実行")
+                val productInfo = productSearchClient.search(id)
+                
+                // 更新用プロパティの構築
+                val updateProps = buildJsonObject {
+                    // カテゴリ設定
+                    val categoryName = if (codeType == ProductSearchClient.BarcodeType.BOOK) "書籍" else "雑誌"
+                    put("カテゴリ", buildJsonObject {
+                        putJsonArray("rich_text") {
+                            addJsonObject { put("text", buildJsonObject { put("content", JsonPrimitive(categoryName)) }) }
+                        }
+                    })
+                    
+                    // APIヒット時の詳細情報
+                    if (productInfo != null) {
+                        println("QRTidy-iOS: API情報あり → 詳細プロパティ構築")
+                        put("物名", buildJsonObject {
+                            putJsonArray("rich_text") {
+                                addJsonObject { put("text", buildJsonObject { put("content", JsonPrimitive(productInfo.title)) }) }
+                            }
+                        })
+                        // 詳細 (概要)
+                        if (productInfo.description.isNotEmpty()) {
+                            put("詳細", buildJsonObject {
+                                putJsonArray("rich_text") {
+                                    addJsonObject { put("text", buildJsonObject { put("content", JsonPrimitive(productInfo.description.take(2000))) }) }
+                                }
+                            })
+                        }
+                        // 補足情報
+                        val supplement = buildString {
+                            if (productInfo.author.isNotEmpty()) appendLine("著者: ${productInfo.author}")
+                            if (productInfo.publisher.isNotEmpty()) appendLine("出版社: ${productInfo.publisher}")
+                            if (productInfo.publishedDate.isNotEmpty()) appendLine("出版日: ${productInfo.publishedDate}")
+                            if (productInfo.price.isNotEmpty()) appendLine("価格: ${productInfo.price}")
+                            if (productInfo.isbn.isNotEmpty()) appendLine("ISBN/JAN: ${productInfo.isbn}")
+                            append("ソース: ${productInfo.source}")
+                        }
+                        put("補足情報", buildJsonObject {
+                            putJsonArray("rich_text") {
+                                addJsonObject { put("text", buildJsonObject { put("content", JsonPrimitive(supplement)) }) }
+                            }
+                        })
+                        // 書影 (写真プロパティ)
+                        if (productInfo.coverUrl.isNotEmpty()) {
+                            println("QRTidy-iOS: 書影URLあり (${productInfo.coverUrl}) → 画像ダウンロード試行")
+                            val imageBytes = notionClient.downloadImage(productInfo.coverUrl)
+                            var fileId: String? = null
+                            
+                            if (imageBytes != null) {
+                                println("QRTidy-iOS: 書影ダウンロード成功 → Notionアップロード試行")
+                                fileId = notionClient.uploadImage(imageBytes)
+                            }
+                            
+                            if (fileId != null) {
+                                println("QRTidy-iOS: 書影アップロード成功 (ID: $fileId)")
+                                put("写真", buildJsonObject {
+                                    putJsonArray("files") {
+                                        addJsonObject {
+                                            put("type", JsonPrimitive("file_upload"))
+                                            put("file_upload", buildJsonObject { put("id", JsonPrimitive(fileId)) })
+                                            put("name", JsonPrimitive("Cover Image"))
+                                        }
+                                    }
+                                })
+                            } else {
+                                println("QRTidy-iOS: 書影処理失敗 → External URL で設定")
+                                put("写真", buildJsonObject {
+                                    putJsonArray("files") {
+                                        addJsonObject {
+                                            put("type", JsonPrimitive("external"))
+                                            put("name", JsonPrimitive("Cover Image"))
+                                            put("external", buildJsonObject { put("url", JsonPrimitive(productInfo.coverUrl)) })
+                                        }
+                                    }
+                                })
+                            }
+                        }
+                    } else {
+                        println("QRTidy-iOS: APIヒットなし → カテゴリのみ更新")
+                    }
+                }
+                // Notion更新実行
+                notionClient.updatePageProperties(page.id, updateProps)
+            } else {
+                println("QRTidy-iOS: カテゴリ未設定だが一般商品/不明コード($codeType)のためAPI検索スキップ")
+            }
+        } else {
+             println("QRTidy-iOS: カテゴリ設定済み($currentCategory)のためAPI検索スキップ")
+        }
+
+        // 4. 画像アップロード (カメラ撮影分があれば常に追加/上書き)
+        capturedImageData?.let { imgData ->
+            val fileId = notionClient.uploadImage(imgData)
+            if (fileId != null) notionClient.updatePageImage(page.id, fileId)
+        }
+        
+        return page
+    }
+
     fun onIdDetected(id: String) {
         if (!isScanningActive || isLocked) return
 
@@ -76,28 +207,16 @@ fun MainViewController() = androidx.compose.ui.window.ComposeUIViewController {
             try {
                 when (currentMode) {
                     IOSScanMode.HUKURO_SCAN -> {
-                        // ★ 商品情報検索（実験: OpenBD + Google Books 補完）
-                        val productInfo = productSearchClient.search(id)
-                        if (productInfo != null) {
-                            println("QRTidy-iOS: ★商品情報★ タイトル=${productInfo.title} / 著者=${productInfo.author} / 出版社=${productInfo.publisher} / 価格=¥${productInfo.price} / 出版日=${productInfo.publishedDate} / ソース=${productInfo.source}")
-                            if (productInfo.coverUrl.isNotEmpty()) println("QRTidy-iOS: ★書影URL★ ${productInfo.coverUrl}")
-                            if (productInfo.description.isNotEmpty()) println("QRTidy-iOS: ★概要★ ${productInfo.description}")
-                            if (productInfo.toc.isNotEmpty()) println("QRTidy-iOS: ★目次★ ${productInfo.toc}")
-                        } else {
-                            println("QRTidy-iOS: 商品情報なし（OpenBD・GoogleBooks ともにデータなし）: $id")
-                        }
+                        // 共通処理を呼び出し
+                        val page = processHukuroScan(id)
 
-                        val page = notionClient.findOrCreatePage(
-                            SecretConfig.DATABASE_ID_HUKURO, "袋ID", id, "商品名", "新規登録パーツ"
-                        )
-                        // 画像アップロード
-                        capturedImageData?.let { imgData ->
-                            val fileId = notionClient.uploadImage(imgData)
-                            if (fileId != null) notionClient.updatePageImage(page.id, fileId)
-                        }
                         // Notionページを開く
                         openUrl(page.url)
-                        val name = page.properties["商品名"]?.rich_text?.firstOrNull()?.plain_text ?: id
+                        
+                        // 表示更新
+                        // 注: APIでタイトル更新した場合も、ここでの page は更新前の情報しか持っていない。
+                        // 必要なら再取得するか、APIレスポンスを利用する必要があるが、一旦既存挙動(更新前または作成直後のタイトル)を表示。
+                        val name = page.properties["物名"]?.rich_text?.firstOrNull()?.plain_text ?: id
                         resultTitle = name
                         statusMessage = "袋を開きました"
                         isScanningActive = false
@@ -134,14 +253,13 @@ fun MainViewController() = androidx.compose.ui.window.ComposeUIViewController {
                     }
                     IOSScanMode.SHIMAU_STEP2_HUKURO -> {
                         val hakoId = selectedHakoPageId ?: return@launch
-                        val hukuroPage = notionClient.findOrCreatePage(
-                            SecretConfig.DATABASE_ID_HUKURO, "袋ID", id, "商品名", "新規登録パーツ"
-                        )
-                        capturedImageData?.let { imgData ->
-                            val fileId = notionClient.uploadImage(imgData)
-                            if (fileId != null) notionClient.updatePageImage(hukuroPage.id, fileId)
-                        }
+                        
+                        // 共通処理を呼び出し
+                        val hukuroPage = processHukuroScan(id)
+                        
+                        // 箱に紐付け
                         notionClient.updateHukuroLocation(hukuroPage.id, hakoId)
+                        
                         resultTitle = "完了"
                         statusMessage = "袋を箱に紐付けました！"
                         val finalHakoPage = notionClient.getPage(SecretConfig.DATABASE_ID_HAKO, "箱ID", selectedHakoUid!!)
@@ -149,6 +267,7 @@ fun MainViewController() = androidx.compose.ui.window.ComposeUIViewController {
                         currentMode = IOSScanMode.HUKURO_SCAN
                         isScanningActive = false
                     }
+
                 }
             } catch (e: Exception) {
                 resultTitle = "エラー"

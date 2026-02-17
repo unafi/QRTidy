@@ -39,75 +39,88 @@ class ProductSearchClient {
     }
 
     /**
+     * バーコードの種類を判別する
+     */
+    fun classifyBarcodeType(scannedValue: String): BarcodeType {
+        // ISBN (978/979)
+        val isbn = extractISBN(scannedValue)
+        if (isbn != null) return BarcodeType.BOOK
+
+        // JAN (491) -> 雑誌
+        val jan = extractJANCode(scannedValue)
+        if (jan != null && jan.startsWith("491")) return BarcodeType.MAGAZINE
+
+        // その他 JAN
+        if (jan != null) return BarcodeType.OTHER
+
+        return BarcodeType.UNKNOWN
+    }
+
+    enum class BarcodeType {
+        BOOK, MAGAZINE, OTHER, UNKNOWN
+    }
+
+    /**
      * JAN/ISBNコードから商品情報を検索
      * @param scannedValue スキャンされた値（ISBN単体 or "ISBN-JAN2" の2段組形式 or 一般JAN）
      * @return 商品情報。見つからない場合はnull
      */
     suspend fun search(scannedValue: String): ProductInfo? {
+        val type = classifyBarcodeType(scannedValue)
         println("$TAG: ========== 商品検索開始 ==========")
         println("$TAG: スキャン値: $scannedValue")
-        println("$TAG: バーコード種別: ${classifyBarcode(scannedValue)}")
+        println("$TAG: バーコード種別: $type")
 
         return try {
-            // 2段組バーコード（"978...-192..."）の場合、ISBN部分を取り出す
-            val isbn = extractISBN(scannedValue)
-            println("$TAG: ISBN抽出結果: ${isbn ?: "ISBNなし"}")
-
-            if (isbn != null) {
-                // Step 1: OpenBD で基本情報を取得（ISBN がある場合のみ）
-                var result = searchOpenBD(isbn)
-
-                // Step 2: Google Books API で補完
-                if (result != null) {
-                    result = supplementWithGoogleBooks(result, isbn)
-                    println("$TAG: ========== 検索成功（OpenBD + Google Books 補完）==========")
-                    return result
-                }
-                println("$TAG: OpenBD: ISBNに対応するデータなし")
-
-                // Step 3: OpenBD にない場合、Google Books のみで試行
-                println("$TAG: Google Books のみで検索を試行（ISBN: $isbn）")
-                val gbResult = searchGoogleBooks(isbn)
-                if (gbResult != null) {
-                    println("$TAG: ========== 検索成功（Google Books のみ）==========")
-                    return gbResult
-                }
-            } else {
-                // ISBN ではない → 雑誌 JAN (491xxx) なら楽天ブックス雑誌検索API
-                // それ以外 (一般JAN) または 雑誌検索でヒットしなかった場合は 楽天市場商品検索API
-                val janCode = extractJANCode(scannedValue)
-                if (janCode != null) {
-                    if (janCode.startsWith("491")) {
-                        println("$TAG: 雑誌JAN検出 → 楽天ブックス雑誌検索APIで検索")
-                        val rakutenMagazineResult = searchRakutenMagazine(janCode)
-                        if (rakutenMagazineResult != null) {
-                            println("$TAG: ========== 検索成功（楽天ブックス雑誌検索）==========")
-                            return rakutenMagazineResult
-                        }
-                        println("$TAG: 楽天ブックス雑誌検索でヒットなし → 楽天市場商品検索へフォールバック")
+            when (type) {
+                BarcodeType.BOOK -> {
+                    val isbn = extractISBN(scannedValue) ?: return null
+                    println("$TAG: ISBN抽出結果: $isbn")
+                    // 1. OpenBD で検索
+                    var info = searchOpenBD(isbn)
+                    
+                    // 2. Google Books で補完
+                    if (info != null) {
+                         info = supplementWithGoogleBooks(info, isbn)
+                    } else {
+                        // OpenBDで見つからない場合、Google Books単体で検索
+                        println("$TAG: [OpenBD] ヒットなし → Google Books API で検索試行")
+                        info = searchGoogleBooks(isbn)
                     }
                     
-                    // 一般JAN、または雑誌検索でヒットしなかった場合
-                    println("$TAG: JANコード($janCode) → 楽天市場商品検索APIで検索")
-                    val rakutenIchibaResult = searchRakutenIchiba(janCode)
-                    if (rakutenIchibaResult != null) {
-                        println("$TAG: ========== 検索成功（楽天市場商品検索）==========")
-                        return rakutenIchibaResult
+                    if (info != null) {
+                        println("$TAG: ========== 検索成功（書籍）==========")
+                        return info
                     }
-                    println("$TAG: 楽天市場商品検索でもヒットなし")
-                } else {
-                    println("$TAG: ISBN/JAN未検出 → 検索スキップ")
+                    println("$TAG: 書籍検索ヒットなし")
+                    null
+                }
+                BarcodeType.MAGAZINE -> {
+                    val janCode = extractJANCode(scannedValue) ?: return null
+                    println("$TAG: 雑誌JAN検出 → 楽天ブックス雑誌検索APIで検索")
+                    val rakutenResult = searchRakutenMagazine(janCode)
+                    if (rakutenResult != null) {
+                        println("$TAG: ========== 検索成功（楽天ブックス雑誌検索）==========")
+                        return rakutenResult
+                    }
+                    println("$TAG: 楽天ブックス雑誌検索でヒットなし")
+                    null
+                }
+                BarcodeType.OTHER -> {
+                    println("$TAG: 一般商品JAN ($scannedValue) → API検索スキップ")
+                    null
+                }
+                else -> {
+                    println("$TAG: 未知のコード形式 → 検索スキップ")
+                    null
                 }
             }
-
-            println("$TAG: ========== 検索終了（結果なし）==========")
-            null
         } catch (e: Exception) {
-            println("$TAG: ========== 検索エラー ==========")
-            println("$TAG: エラー種別: ${e::class.simpleName}")
-            println("$TAG: エラー内容: ${e.message}")
-            println("$TAG: スタックトレース: ${e.stackTraceToString()}")
+            println("$TAG: 検索エラー: ${e.message}")
+            e.printStackTrace()
             null
+        } finally {
+            println("$TAG: ========== 検索終了 ==========")
         }
     }
 
@@ -252,7 +265,8 @@ class ProductSearchClient {
         }
 
         val authors = volumeInfo.authors?.joinToString(", ") ?: ""
-        val thumbnailUrl = volumeInfo.imageLinks?.thumbnail ?: volumeInfo.imageLinks?.smallThumbnail ?: ""
+        val thumbnailUrl = (volumeInfo.imageLinks?.thumbnail ?: volumeInfo.imageLinks?.smallThumbnail ?: "")
+            .replace("http://", "https://")
 
         // --- 取得結果を詳細ログ出力 ---
         println("$TAG: [GoogleBooks] ── 取得データ詳細 ──")

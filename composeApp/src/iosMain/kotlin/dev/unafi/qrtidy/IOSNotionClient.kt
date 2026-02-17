@@ -58,7 +58,16 @@ class IOSNotionClient {
             contentType(ContentType.Application.Json)
             setBody(requestBody)
         }
-        return response.body()
+        
+        val bodyText = response.bodyAsText()
+        println("$TAG: Notion Create Response: $bodyText")
+
+        if (!response.status.isSuccess()) {
+             println("$TAG: Notion Create Failed: ${response.status} - $bodyText")
+             throw Exception("Notion Create Failed: $bodyText")
+        }
+        
+        return json.decodeFromString(bodyText)
     }
 
     // --- ページ更新 ---
@@ -70,7 +79,16 @@ class IOSNotionClient {
             contentType(ContentType.Application.Json)
             setBody(requestBody)
         }
-        return response.body()
+        
+        val bodyText = response.bodyAsText()
+        println("$TAG: Notion Update Response: $bodyText")
+
+        if (!response.status.isSuccess()) {
+             println("$TAG: Notion Update Failed: ${response.status} - $bodyText")
+             throw Exception("Notion Update Failed: $bodyText")
+        }
+        
+        return json.decodeFromString(bodyText)
     }
 
     // --- ページ検索/作成 ---
@@ -166,7 +184,7 @@ class IOSNotionClient {
         }
     }
 
-    // --- ページの写真プロパティ更新 ---
+    // --- ページPhoto更新 ---
     suspend fun updatePageImage(pageId: String, fileId: String): Boolean {
         return try {
             println("$TAG: Notion: ページ $pageId に画像 $fileId を紐付け中...")
@@ -187,6 +205,38 @@ class IOSNotionClient {
         } catch (e: Exception) {
             println("$TAG: Notion: 紐付け失敗: ${e.message}")
             false
+        }
+    }
+
+    // --- 任意のプロパティ更新 ---
+    suspend fun updatePageProperties(pageId: String, properties: JsonObject): Boolean {
+        return try {
+            println("$TAG: Notion: プロパティ更新リクエスト送信...")
+            updatePage(pageId, properties)
+            println("$TAG: Notion: プロパティ更新完了.")
+            true
+        } catch (e: Exception) {
+            println("$TAG: Notion: プロパティ更新失敗: ${e.message}")
+            false
+        }
+    }
+
+    // --- 画像ダウンロード ---
+    suspend fun downloadImage(url: String): ByteArray? {
+        return try {
+            println("$TAG: 画像ダウンロード開始: $url")
+            val response: HttpResponse = client.get(url)
+            if (response.status.isSuccess()) {
+                val bytes: ByteArray = response.body()
+                println("$TAG: 画像ダウンロード成功: ${bytes.size} bytes")
+                bytes
+            } else {
+                println("$TAG: 画像ダウンロード失敗: ${response.status}")
+                null
+            }
+        } catch (e: Exception) {
+            println("$TAG: 画像ダウンロードエラー: ${e.message}")
+            null
         }
     }
 }

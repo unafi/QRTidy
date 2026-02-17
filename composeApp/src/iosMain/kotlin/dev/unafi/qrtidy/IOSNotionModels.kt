@@ -37,7 +37,15 @@ data class IOSNotionProperty(
     val type: String = "",
     val title: List<IOSNotionText>? = null,
     val rich_text: List<IOSNotionText>? = null,
-    val relation: List<IOSNotionRelation>? = null
+    val relation: List<IOSNotionRelation>? = null,
+    val select: IOSNotionSelect? = null
+)
+
+@Serializable
+data class IOSNotionSelect(
+    val id: String? = null,
+    val name: String? = null,
+    val color: String? = null
 )
 
 @Serializable

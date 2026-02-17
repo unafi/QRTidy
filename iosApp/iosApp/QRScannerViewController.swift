@@ -26,7 +26,7 @@ class QRScannerView: UIView,
     // 2段組バーコード待ち合わせ用
     private var pendingBookBarcode: String? = nil   // 片方だけ先に検出された値
     private var pendingBookTimer: Timer? = nil       // タイムアウト用タイマー
-    private let bookBarcodeTimeout: TimeInterval = 1.0  // もう片方を待つ秒数
+    private let bookBarcodeTimeout: TimeInterval = 3.0  // もう片方を待つ秒数
 
     init(qrOnly: Bool = false,
          onQrDetected: @escaping (String) -> Void,
@@ -285,7 +285,19 @@ class QRScannerView: UIView,
                         emitResult(combined)
                         return
                     }
-                    // 同じコードが再検出された場合は無視（タイマー続行）
+                    // 同じコードが再検出された場合は無視（タイマー続行、ただし延長する）
+                    // ユーザーがカメラを当て続けている間は待つ
+                    if pending == ean13 {
+                        pendingBookTimer?.invalidate()
+                        pendingBookTimer = Timer.scheduledTimer(
+                            timeInterval: bookBarcodeTimeout,
+                            target: self,
+                            selector: #selector(bookBarcodeTimedOut),
+                            userInfo: nil,
+                            repeats: false
+                        )
+                        return
+                    }
                     return
                 } else {
                     // 初回検出 → 保持してもう片方を待つ

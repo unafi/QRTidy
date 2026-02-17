@@ -62,14 +62,14 @@ fun MainViewController() = androidx.compose.ui.window.ComposeUIViewController {
     var selectedHakoUid by remember { mutableStateOf<String?>(null) }
 
     // QR検出時の処理
-    // 共通処理: 袋（アイテム）情報のスキャン・登録・更新
+    // 共通処理: 物（アイテム）情報のスキャン・登録・更新
     suspend fun processHukuroScan(id: String): IOSNotionPage {
         // 1. バーコード種別判定
         val codeType = productSearchClient.classifyBarcodeType(id)
         
         // 2. Notionページ検索/作成
         val page = notionClient.findOrCreatePage(
-            SecretConfig.DATABASE_ID_HUKURO, "袋ID", id, "物名", "新規登録パーツ"
+            SecretConfig.DATABASE_ID_HUKURO, "物ID", id, "物名", "新規登録パーツ"
         )
         
         // 3. カテゴリ未設定の場合のみ API検索 & 情報更新
@@ -218,7 +218,7 @@ fun MainViewController() = androidx.compose.ui.window.ComposeUIViewController {
                         // 必要なら再取得するか、APIレスポンスを利用する必要があるが、一旦既存挙動(更新前または作成直後のタイトル)を表示。
                         val name = page.properties["物名"]?.rich_text?.firstOrNull()?.plain_text ?: id
                         resultTitle = name
-                        statusMessage = "袋を開きました"
+                        statusMessage = "物を開きました"
                         isScanningActive = false
                     }
                     IOSScanMode.HAKO_SCAN -> {
@@ -247,7 +247,7 @@ fun MainViewController() = androidx.compose.ui.window.ComposeUIViewController {
                         selectedHakoUid = id
                         currentMode = IOSScanMode.SHIMAU_STEP2_HUKURO
                         val hakoName = hakoPage.properties["箱名"]?.rich_text?.firstOrNull()?.plain_text ?: id
-                        statusMessage = "箱「$hakoName」を選択中。\n次に袋をスキャンしてください。"
+                        statusMessage = "箱「$hakoName」を選択中。\n次に物をスキャンしてください。"
                         capturedImageData = null
                         capturedImageBitmap = null
                     }
@@ -261,7 +261,7 @@ fun MainViewController() = androidx.compose.ui.window.ComposeUIViewController {
                         notionClient.updateHukuroLocation(hukuroPage.id, hakoId)
                         
                         resultTitle = "完了"
-                        statusMessage = "袋を箱に紐付けました！"
+                        statusMessage = "物を箱に紐付けました！"
                         val finalHakoPage = notionClient.getPage(SecretConfig.DATABASE_ID_HAKO, "箱ID", selectedHakoUid!!)
                         finalHakoPage?.let { openUrl(it.url) }
                         currentMode = IOSScanMode.HUKURO_SCAN
@@ -289,10 +289,10 @@ fun MainViewController() = androidx.compose.ui.window.ComposeUIViewController {
         capturedImageData = null
         capturedImageBitmap = null
         statusMessage = when (mode) {
-            IOSScanMode.HUKURO_SCAN -> "袋をスキャンしてください"
+            IOSScanMode.HUKURO_SCAN -> "物をスキャンしてください"
             IOSScanMode.HAKO_SCAN -> "箱をスキャンしてください"
             IOSScanMode.SHIMAU_STEP1_HAKO -> "【1/2】箱をスキャンしてください"
-            IOSScanMode.SHIMAU_STEP2_HUKURO -> "【2/2】袋をスキャンしてください"
+            IOSScanMode.SHIMAU_STEP2_HUKURO -> "【2/2】物をスキャンしてください"
         }
     }
 
@@ -329,7 +329,7 @@ fun MainViewController() = androidx.compose.ui.window.ComposeUIViewController {
                         containerColor = if (currentMode == IOSScanMode.HUKURO_SCAN && isScanningActive)
                             MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary
                     )
-                ) { Text("袋スキャン") }
+                ) { Text("物スキャン") }
 
                 Button(
                     onClick = { onModeChange(IOSScanMode.HAKO_SCAN) },

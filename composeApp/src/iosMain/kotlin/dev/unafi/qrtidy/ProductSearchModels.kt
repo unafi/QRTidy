@@ -163,3 +163,35 @@ data class RakutenIchibaItem(
     val mediumImageUrls: List<String>? = null, // 配列で返る
     val smallImageUrls: List<String>? = null
 )
+
+// --- Yahoo! ショッピング商品検索 API (v3) レスポンスモデル ---
+
+@Serializable
+data class YahooShoppingResponse(
+    val hits: List<YahooShoppingItem> = emptyList(),
+    val totalResultsAvailable: Int = 0
+)
+
+@Serializable
+data class YahooShoppingItem(
+    val name: String = "",
+    val description: String = "",
+    val headLine: String = "",
+    val price: Int = 0,
+    val image: YahooShoppingImage? = null,
+    val brand: YahooShoppingBrand? = null,
+    val janCode: String = "",
+    val url: String = ""
+)
+
+@Serializable
+data class YahooShoppingImage(
+    val small: String = "",
+    val medium: String = ""
+)
+
+@Serializable
+data class YahooShoppingBrand(
+    val name: String = "",
+    val id: String = ""
+)

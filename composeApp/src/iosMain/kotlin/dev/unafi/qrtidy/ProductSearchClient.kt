@@ -92,8 +92,16 @@ class ProductSearchClient {
                         println("$TAG: ========== 検索成功（書籍）==========")
                         return info
                     }
-                    println("$TAG: 書籍検索ヒットなし")
-                    null
+                    
+                    // 3. 書籍APIで見つからない場合、Yahoo!ショッピングで検索（フォールバック）
+                    println("$TAG: 書籍APIヒットなし → Yahoo!ショッピングで再検索")
+                    val yahooResult = searchYahooShopping(isbn)
+                    if (yahooResult != null) {
+                         println("$TAG: ========== 検索成功（Yahoo!フォールバック）==========")
+                         return yahooResult
+                    }
+                    
+                    return null
                 }
                 BarcodeType.MAGAZINE -> {
                     val janCode = extractJANCode(scannedValue) ?: return null
@@ -103,12 +111,34 @@ class ProductSearchClient {
                         println("$TAG: ========== 検索成功（楽天ブックス雑誌検索）==========")
                         return rakutenResult
                     }
-                    println("$TAG: 楽天ブックス雑誌検索でヒットなし")
-                    null
+                    
+                    // 雑誌APIで見つからない場合、Yahoo!ショッピングで検索（フォールバック）
+                    println("$TAG: 楽天ブックス雑誌検索ヒットなし → Yahoo!ショッピングで再検索")
+                    val yahooResult = searchYahooShopping(janCode)
+                    if (yahooResult != null) {
+                         println("$TAG: ========== 検索成功（Yahoo!フォールバック）==========")
+                         return yahooResult
+                    }
+                    
+                    return null
                 }
                 BarcodeType.OTHER -> {
-                    println("$TAG: 一般商品JAN ($scannedValue) → API検索スキップ")
-                    null
+                    println("$TAG: 一般商品JAN ($scannedValue) → Yahoo!ショッピングAPIで検索")
+                    val yahooResult = searchYahooShopping(scannedValue)
+                    if (yahooResult != null) {
+                        println("$TAG: ========== 検索成功（Yahoo!一般商品）==========")
+                        return yahooResult
+                    }
+
+                    // Yahoo!で見つからない場合、楽天市場APIで検索（最終手段）
+                    println("$TAG: Yahoo!検索ヒットなし → 楽天市場APIで検索")
+                    val rakutenResult = searchRakutenIchiba(scannedValue)
+                    if (rakutenResult != null) {
+                        println("$TAG: ========== 検索成功（楽天一般商品）==========")
+                        return rakutenResult
+                    }
+                    
+                    return null
                 }
                 else -> {
                     println("$TAG: 未知のコード形式 → 検索スキップ")
@@ -571,5 +601,112 @@ class ProductSearchClient {
         if (code.length == 13) return "EAN-13 (その他)"
         if (code.length == 8) return "EAN-8"
         return "不明 (${code.length}桁)"
+    }
+
+    /**
+     * Yahoo!ショッピング商品検索 API (v3) で商品情報を取得
+     * 一般JANコードなどで検索
+     */
+    private suspend fun searchYahooShopping(janCode: String): ProductInfo? {
+        val baseUrl = "https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch"
+        println("$TAG: [Yahoo!] リクエスト: GET $baseUrl?jan_code=$janCode")
+
+        val response: HttpResponse = try {
+            client.get(baseUrl) {
+                parameter("appid", SecretConfig.YAHOO_CLIENT_ID)
+                parameter("jan_code", janCode)
+                parameter("sort", "-price") // 価格高い順（信頼できそうなショップが上位に来ることを期待）
+                parameter("results", "1")
+            }
+        } catch (e: Exception) {
+            println("$TAG: [Yahoo!] HTTP通信エラー: ${e::class.simpleName}: ${e.message}")
+            return null
+        }
+
+        val bodyText = response.bodyAsText()
+        if (bodyText.length < 3000) {
+            println("$TAG: [Yahoo!] レスポンス全文: $bodyText")
+        } else {
+            println("$TAG: [Yahoo!] レスポンス先頭500文字: ${bodyText.take(500)}")
+        }
+
+        val yahooResponse: YahooShoppingResponse = try {
+            json.decodeFromString(bodyText)
+        } catch (e: Exception) {
+            println("$TAG: [Yahoo!] JSONパースエラー: ${e::class.simpleName}: ${e.message}")
+            return null
+        }
+
+        println("$TAG: [Yahoo!] 検索ヒット数: ${yahooResponse.totalResultsAvailable} (取得数: ${yahooResponse.hits.size})")
+
+        if (yahooResponse.hits.isEmpty()) {
+            println("$TAG: [Yahoo!] ヒットなし")
+            return null
+        }
+
+        val item = yahooResponse.hits[0]
+        val imageUrl = item.image?.medium ?: item.image?.small ?: ""
+        val brandName = item.brand?.name ?: ""
+
+        // 詳細情報の抽出ロジック（ユーザー指定の切り出し方法）
+        // [物名] = ■タイトル: の後ろ 〜 <br> の直前まで
+        // [補足情報] = ■JAN/EAN:, ■メーカー:, ■サイズ:, ■発売日:
+        
+        val rawDescription = item.description // <br> を置換せずにそのまま使用
+
+        fun extractValue(key: String): String {
+            val startMarker = "■$key:"
+            val startIndex = rawDescription.indexOf(startMarker)
+            if (startIndex == -1) return ""
+            
+            val contentStart = startIndex + startMarker.length
+            val endIndex = rawDescription.indexOf("<br>", contentStart)
+            
+            // <br>が見つからない場合は末尾まで、見つかればそこまで
+            return if (endIndex != -1) {
+                rawDescription.substring(contentStart, endIndex).trim()
+            } else {
+                rawDescription.substring(contentStart).trim()
+            }
+        }
+
+        // 項目の抽出
+        val extractedTitle = extractValue("タイトル")
+        val itemType = extractValue("機種").ifEmpty { extractValue("商品形態") }.ifEmpty { "その他" } // [カテゴリ]用
+        
+        val janEan = extractValue("JAN/EAN").ifEmpty { extractValue("JAN") }
+        val manufacturer = extractValue("メーカー").ifEmpty { brandName }
+        val size = extractValue("サイズ")
+        val releaseDate = extractValue("発売日")
+        
+        // [補足説明]
+        val supplementInfo = buildString {
+            appendLine("JAN/EAN: ${janEan.ifEmpty { item.janCode.ifEmpty { janCode } }}")
+            if (manufacturer.isNotEmpty()) appendLine("メーカー: $manufacturer")
+            if (size.isNotEmpty()) appendLine("サイズ: $size")
+            if (releaseDate.isNotEmpty()) appendLine("発売日: $releaseDate")
+        }.trim()
+
+        // --- 取得結果を詳細ログ出力 ---
+        println("$TAG: [Yahoo!] ── 取得データ詳細 ──")
+        println("$TAG: [Yahoo!]   タイトル(抽出): $extractedTitle")
+        println("$TAG: [Yahoo!]   商品名(元):   ${item.name}")
+        println("$TAG: [Yahoo!]   種類(カテゴリ): $itemType")
+        println("$TAG: [Yahoo!]   メーカー:     $manufacturer")
+        println("$TAG: [Yahoo!]   価格:         ¥${item.price}")
+        println("$TAG: [Yahoo!] ── 詳細ここまで ──")
+
+        return ProductInfo(
+            isbn = item.janCode.ifEmpty { janCode },
+            title = extractedTitle.ifEmpty { item.name }, // 抽出できたタイトルがあればそれを使用、なければ元の商品名
+            author = itemType,           // [カテゴリ]
+            publisher = manufacturer,
+            price = item.price.toString(),
+            coverUrl = imageUrl,
+            description = "",            // [詳細] は空のままにする（ユーザー指示）
+            toc = supplementInfo,        // [補足情報]
+            publishedDate = releaseDate,
+            source = "YahooShopping"
+        )
     }
 }

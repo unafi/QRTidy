@@ -90,15 +90,22 @@ fun MainViewController() = androidx.compose.ui.window.ComposeUIViewController {
         println("QRTidy-iOS: 現在のカテゴリ(判定値): '$currentCategory'")
 
         if (currentCategory.isEmpty()) {
-            // 対象: 書籍 or 雑誌 (一般商品はスキップ)
-            if (codeType == ProductSearchClient.BarcodeType.BOOK || codeType == ProductSearchClient.BarcodeType.MAGAZINE) {
-                println("QRTidy-iOS: カテゴリ未設定 & 書籍/雑誌コード検出 → API検索実行")
+            // 対象: 書籍, 雑誌, または一般商品(その他)
+            if (codeType == ProductSearchClient.BarcodeType.BOOK || 
+                codeType == ProductSearchClient.BarcodeType.MAGAZINE ||
+                codeType == ProductSearchClient.BarcodeType.OTHER) {
+                
+                println("QRTidy-iOS: カテゴリ未設定 & コード検出($codeType) → API検索実行")
                 val productInfo = productSearchClient.search(id)
                 
                 // 更新用プロパティの構築
                 val updateProps = buildJsonObject {
                     // カテゴリ設定
-                    val categoryName = if (codeType == ProductSearchClient.BarcodeType.BOOK) "書籍" else "雑誌"
+                    val categoryName = when (codeType) {
+                        ProductSearchClient.BarcodeType.BOOK -> "書籍"
+                        ProductSearchClient.BarcodeType.MAGAZINE -> "雑誌"
+                        else -> "一般" // 一般商品のデフォルトカテゴリ
+                    }
                     put("カテゴリ", buildJsonObject {
                         putJsonArray("rich_text") {
                             addJsonObject { put("text", buildJsonObject { put("content", JsonPrimitive(categoryName)) }) }
@@ -108,27 +115,58 @@ fun MainViewController() = androidx.compose.ui.window.ComposeUIViewController {
                     // APIヒット時の詳細情報
                     if (productInfo != null) {
                         println("QRTidy-iOS: API情報あり → 詳細プロパティ構築")
+                        
+                        // [物名] = タイトル
                         put("物名", buildJsonObject {
                             putJsonArray("rich_text") {
                                 addJsonObject { put("text", buildJsonObject { put("content", JsonPrimitive(productInfo.title)) }) }
                             }
                         })
-                        // 詳細 (概要)
-                        if (productInfo.description.isNotEmpty()) {
-                            put("詳細", buildJsonObject {
+
+                        // Yahoo!検索の場合、ProductInfo のフィールドを特殊なマッピングで使用しているため注意
+                        // author -> [カテゴリ] (抽出した種類)
+                        // description -> [詳細] (登場作品など)
+                        // toc -> [補足情報] (JAN, メーカー, サイズ, 発売日)
+                        
+                        // [カテゴリ] 上書き更新 (APIから種類が取れた場合)
+                        if (productInfo.source == "YahooShopping" && productInfo.author.isNotEmpty()) {
+                             put("カテゴリ", buildJsonObject {
                                 putJsonArray("rich_text") {
-                                    addJsonObject { put("text", buildJsonObject { put("content", JsonPrimitive(productInfo.description.take(2000))) }) }
+                                    addJsonObject { put("text", buildJsonObject { put("content", JsonPrimitive(productInfo.author)) }) }
+                                }
+                            })
+                        } else if (productInfo.source == "YahooShopping") {
+                            // 種類が取れなかった場合は "その他"
+                             put("カテゴリ", buildJsonObject {
+                                putJsonArray("rich_text") {
+                                    addJsonObject { put("text", buildJsonObject { put("content", JsonPrimitive("その他")) }) }
                                 }
                             })
                         }
-                        // 補足情報
-                        val supplement = buildString {
-                            if (productInfo.author.isNotEmpty()) appendLine("著者: ${productInfo.author}")
-                            if (productInfo.publisher.isNotEmpty()) appendLine("出版社: ${productInfo.publisher}")
-                            if (productInfo.publishedDate.isNotEmpty()) appendLine("出版日: ${productInfo.publishedDate}")
-                            if (productInfo.price.isNotEmpty()) appendLine("価格: ${productInfo.price}")
-                            if (productInfo.isbn.isNotEmpty()) appendLine("ISBN/JAN: ${productInfo.isbn}")
-                            append("ソース: ${productInfo.source}")
+
+                        // [詳細]
+                        val detailText = if (productInfo.source == "YahooShopping") productInfo.description else productInfo.description.take(2000)
+                        // Yahoo!の場合は空文字でも更新対象に含める（以前の値をクリアするため）、他は空ならスキップ
+                        if (productInfo.source == "YahooShopping" || detailText.isNotEmpty()) {
+                            put("詳細", buildJsonObject {
+                                putJsonArray("rich_text") {
+                                    addJsonObject { put("text", buildJsonObject { put("content", JsonPrimitive(detailText)) }) }
+                                }
+                            })
+                        }
+                        
+                        // [補足情報]
+                        val supplement = if (productInfo.source == "YahooShopping") {
+                            productInfo.toc // Yahooの場合はここに入れている
+                        } else {
+                            buildString {
+                                if (productInfo.author.isNotEmpty()) appendLine("著者: ${productInfo.author}")
+                                if (productInfo.publisher.isNotEmpty()) appendLine("出版社: ${productInfo.publisher}")
+                                if (productInfo.publishedDate.isNotEmpty()) appendLine("出版日: ${productInfo.publishedDate}")
+                                if (productInfo.price.isNotEmpty()) appendLine("価格: ${productInfo.price}")
+                                if (productInfo.isbn.isNotEmpty()) appendLine("ISBN/JAN: ${productInfo.isbn}")
+                                append("ソース: ${productInfo.source}")
+                            }
                         }
                         put("補足情報", buildJsonObject {
                             putJsonArray("rich_text") {
@@ -177,7 +215,7 @@ fun MainViewController() = androidx.compose.ui.window.ComposeUIViewController {
                 // Notion更新実行
                 notionClient.updatePageProperties(page.id, updateProps)
             } else {
-                println("QRTidy-iOS: カテゴリ未設定だが一般商品/不明コード($codeType)のためAPI検索スキップ")
+                println("QRTidy-iOS: カテゴリ未設定だが検索対象外コード($codeType)のためAPI検索スキップ")
             }
         } else {
              println("QRTidy-iOS: カテゴリ設定済み($currentCategory)のためAPI検索スキップ")
